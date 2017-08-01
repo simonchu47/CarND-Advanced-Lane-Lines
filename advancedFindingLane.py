@@ -32,6 +32,7 @@ flags.DEFINE_bool('video', False, "Input is video")
 flags.DEFINE_string('image_path', '', "The input image file path")
 flags.DEFINE_string('video_path', '', "The input video file path")
 flags.DEFINE_bool('perspective', False, "Generate perspective transform matrix")
+flags.DEFINE_bool('debug', False, "Generate perspective transform matrix")
 
 class Line():
     def __init__(self):
@@ -251,8 +252,15 @@ def hls_filter(image, h_bottom, h_upper, l_bottom, l_upper, s_bottom, s_upper):
     #return combined
     return condition
     
+def sobel_filter(binary_image, low_thres, high_thres):
+    sobel_image = cv2.Sobel(binary_image, cv2.CV_64F, 1, 1)
+    abs_sobel = np.absolute(sobel_image)
+    scaled_sobel = np.uint8(255*abs_sobel/np.max(abs_sobel))
+    sobel_condition = np.zeros_like(binary_image, dtype=np.bool)
+    sobel_condition[(scaled_sobel>=low_thres) & (scaled_sobel<=high_thres)] = True
+    return sobel_condition
 
-def sliding_windows_finding_lines(binary_warped, xm_per_pix, ym_per_pix):
+def sliding_windows_finding_lines(binary_warped):
     # Assuming a warped binary image called "binary_warped" is created
     # Take a histogram of the bottom half of the image
     histogram = np.sum(binary_warped[int(binary_warped.shape[0]/2):,:], axis=0)
@@ -293,9 +301,12 @@ def sliding_windows_finding_lines(binary_warped, xm_per_pix, ym_per_pix):
         win_xleft_high = leftx_current + margin
         win_xright_low = rightx_current - margin
         win_xright_high = rightx_current + margin
-        # Draw the windows on the visualization image
-        cv2.rectangle(out_img,(win_xleft_low,win_y_low),(win_xleft_high,win_y_high),(0,255,0), 2) 
-        cv2.rectangle(out_img,(win_xright_low,win_y_low),(win_xright_high,win_y_high),(0,255,0), 2) 
+        
+        if FLAGS.debug is True:
+            # Draw the windows on the visualization image
+            cv2.rectangle(out_img,(win_xleft_low,win_y_low),(win_xleft_high,win_y_high),(0,255,0), 2) 
+            cv2.rectangle(out_img,(win_xright_low,win_y_low),(win_xright_high,win_y_high),(0,255,0), 2) 
+        
         # Identify the nonzero pixels in x and y within the window
         good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0]
         good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0]
@@ -316,8 +327,42 @@ def sliding_windows_finding_lines(binary_warped, xm_per_pix, ym_per_pix):
     leftx = nonzerox[left_lane_inds]
     lefty = nonzeroy[left_lane_inds] 
     rightx = nonzerox[right_lane_inds]
-    righty = nonzeroy[right_lane_inds] 
+    righty = nonzeroy[right_lane_inds]
+    
+    if FLAGS.debug is True:
+        left_fit = np.polyfit(lefty, leftx, 2)
+        right_fit = np.polyfit(righty, rightx, 2)
+        # Generate x and y values for plotting
+        ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
+        left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+        right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+        
+        out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
+        out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
+        plt.imshow(out_img)
+        plt.plot(left_fitx, ploty, color='yellow')
+        plt.plot(right_fitx, ploty, color='yellow')
+        plt.xlim(0, binary_warped.shape[1])
+        plt.ylim(binary_warped.shape[0], 0)
+        filename = FLAGS.image_path.split('/')[-1].split('.')[0]
+        plt.savefig("./"+filename+"_sliding_windows.jpg")
 
+    return leftx, lefty, rightx, righty
+
+
+def fit_pixles_polynomial(pixels_x, pixels_y, unit_x, unit_y):
+    line_fit = np.polyfit(pixels_y*unit_y, pixels_x*unit_x, 2)
+    return line_fit
+
+def calculate_curve_rad(position, line_fit):
+    curverad = ((1 + (2*line_fit[0]*position + line_fit[1])**2)**1.5) / np.absolute(2*line_fit[0])
+    return curverad
+
+def calculate_x_position(y_position, line_fit):
+    x_position = line_fit[0]*y_position**2 + line_fit[1]*y_position + line_fit[2]
+    return x_position
+
+    """    
     # Fit a second order polynomial to each
     if (len(leftx)>0) and (len(lefty)>0):
         left_fit = np.polyfit(lefty, leftx, 2)
@@ -344,6 +389,7 @@ def sliding_windows_finding_lines(binary_warped, xm_per_pix, ym_per_pix):
     
     left_fit_x_pos = left_fit[0]*y_eval**2 + left_fit[1]*y_eval + left_fit[2]
     right_fit_x_pos = right_fit[0]*y_eval**2 + right_fit[1]*y_eval + right_fit[2]
+    """
     
     """
     # Generate x and y values for plotting
@@ -360,10 +406,8 @@ def sliding_windows_finding_lines(binary_warped, xm_per_pix, ym_per_pix):
     plt.ylim(720, 0)
     plt.savefig("./test1_sliding_windows.jpg")
     """
-    
-    return left_fit, right_fit, left_curverad, right_curverad, left_fit_x_pos, right_fit_x_pos
 
-def known_fit_finding_lines(binary_warped, left_fit, right_fit, xm_per_pix, ym_per_pix):
+def known_fit_finding_lines(binary_warped, left_fit, right_fit):
     # Assume you now have a new warped binary image 
     # from the next frame of video (also called "binary_warped")
     # It's now much easier to find line pixels!
@@ -380,7 +424,45 @@ def known_fit_finding_lines(binary_warped, left_fit, right_fit, xm_per_pix, ym_p
     rightx = nonzerox[right_lane_inds]
     righty = nonzeroy[right_lane_inds]
     
+    if FLAGS.debug is True:
+        
+        # Generate x and y values for plotting
+        ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
+        left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+        right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
     
+        # Create an image to draw on and an image to show the selection window
+        out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255
+        window_img = np.zeros_like(out_img)
+        # Color in left and right line pixels
+        out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
+        out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
+    
+        # Generate a polygon to illustrate the search window area
+        # And recast the x and y points into usable format for cv2.fillPoly()
+        left_line_window1 = np.array([np.transpose(np.vstack([left_fitx-margin, ploty]))])
+        left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx+margin, ploty])))])
+        left_line_pts = np.hstack((left_line_window1, left_line_window2))
+        right_line_window1 = np.array([np.transpose(np.vstack([right_fitx-margin, ploty]))])
+        right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx+margin, ploty])))])
+        right_line_pts = np.hstack((right_line_window1, right_line_window2))
+        
+        # Draw the lane onto the warped blank image
+        cv2.fillPoly(window_img, np.int_([left_line_pts]), (0,255, 0))
+        cv2.fillPoly(window_img, np.int_([right_line_pts]), (0,255, 0))
+        result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
+        plt.imshow(result)
+        plt.plot(left_fitx, ploty, color='yellow')
+        plt.plot(right_fitx, ploty, color='yellow')
+        plt.xlim(0, binary_warped.shape[1])
+        plt.ylim(binary_warped.shape[0], 0)
+        filename = FLAGS.image_path.split('/')[-1].split('.')[0]
+        plt.savefig("./"+filename+"_known_fit.jpg")  
+    
+    return leftx, lefty, rightx, righty
+    
+    
+    """    
     # Fit a second order polynomial to each    
     if (len(leftx)>0) and (len(lefty)>0):
         left_fit = np.polyfit(lefty, leftx, 2)
@@ -408,6 +490,9 @@ def known_fit_finding_lines(binary_warped, left_fit, right_fit, xm_per_pix, ym_p
     
     left_fit_x_pos = left_fit[0]*y_eval**2 + left_fit[1]*y_eval + left_fit[2]
     right_fit_x_pos = right_fit[0]*y_eval**2 + right_fit[1]*y_eval + right_fit[2]
+    """    
+    
+
     
     """
     # Generate x and y values for plotting
@@ -442,8 +527,6 @@ def known_fit_finding_lines(binary_warped, left_fit, right_fit, xm_per_pix, ym_p
     plt.ylim(720, 0)
     #plt.savefig("./test1_known_fit.jpg")
     """
-    
-    return left_fit, right_fit, left_curverad, right_curverad, left_fit_x_pos, right_fit_x_pos
 
 def draw_lane(image, left_fit, right_fit, Minv):
     # Create an image to draw the lines on
@@ -615,10 +698,18 @@ def pipeline(image, h_thresh=(98.0, 102.0), l_thresh=(200.0, 255.0), s_thresh=(1
     #hls_filtered = hls_filter(undist, h_thresh[0], h_thresh[1], l_thresh[0], l_thresh[1], s_thresh[0], s_thresh[1])
     yellow_line_filter = hls_filter(undist, 90.0, 101.0, 0.0, 255.0, 50.0, 255.0)
     white_line_filter = hls_filter(undist, 0.0, 180.0, 210.0, 255.0, 0.0, 255.0)
+    
+    #Sobel filter with R channel
+    r_ch_sobel_filter = sobel_filter(undist[:,:,0], 70.0, 255.0)
+    
     hls_filtered = np.zeros_like(undist)
-    all_filter = yellow_line_filter | white_line_filter
-    #all_filter = yellow_line_filter
+    all_filter = yellow_line_filter | white_line_filter | r_ch_sobel_filter
     hls_filtered[all_filter] = undist[all_filter]
+    
+    if FLAGS.debug is True:
+        filename = FLAGS.image_path.split('/')[-1].split('.')[0]
+        cv2.imwrite('./'+filename+'_hls_filtered.jpg', cv2.cvtColor(hls_filtered, cv2.COLOR_BGR2RGB))
+
     gray_filtered = cv2.cvtColor(hls_filtered, cv2.COLOR_BGR2GRAY)
     
     """
@@ -631,18 +722,44 @@ def pipeline(image, h_thresh=(98.0, 102.0), l_thresh=(200.0, 255.0), s_thresh=(1
     
     combined_binary = np.zeros_like(gray_filtered)
     combined_binary[gray_filtered>0] = 255
-    warped = cv2.warpPerspective(combined_binary, M, (combined_binary.shape[1], combined_binary.shape[0]), flags=cv2.INTER_LINEAR)                   
+    warped = cv2.warpPerspective(combined_binary, M, (combined_binary.shape[1], combined_binary.shape[0]), flags=cv2.INTER_LINEAR)
     
+    if FLAGS.debug is True:
+        warped_image = np.dstack((warped, warped, warped))
+        filename = FLAGS.image_path.split('/')[-1].split('.')[0]
+        cv2.imwrite('./'+filename+'_warped_filtered.jpg', cv2.cvtColor(warped_image, cv2.COLOR_BGR2RGB))
+        
+    y_eval = warped.shape[0] - 1
+                                
     if left_line.check_last_detected() == True and left_line.check_last_detected() == True:
         left_fit = left_line.current_fit
         right_fit = right_line.current_fit
-        left_fit, right_fit, left_line.radius_of_curvature, right_line.radius_of_curvature, left_fit_x_pos, right_fit_x_pos = known_fit_finding_lines(warped, left_fit, right_fit, xm_per_pix, ym_per_pix)
-        left_line.current_fit = left_fit
-        right_line.current_fit = right_fit
+        leftx, lefty, rightx, righty = known_fit_finding_lines(warped, left_fit, right_fit)
     else:
-        left_fit, right_fit, left_line.radius_of_curvature, right_line.radius_of_curvature, left_fit_x_pos, right_fit_x_pos = sliding_windows_finding_lines(warped, xm_per_pix, ym_per_pix)
-        left_line.current_fit = left_fit
-        right_line.current_fit = right_fit
+        leftx, lefty, rightx, righty = sliding_windows_finding_lines(warped)
+        
+    if (len(leftx)>0) and (len(lefty)>0):
+        left_fit = fit_pixles_polynomial(leftx, lefty, 1, 1)
+        left_fit_cr = fit_pixles_polynomial(leftx, lefty, xm_per_pix, ym_per_pix)
+        left_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, left_fit_cr)
+    else:
+        left_line.detected = False
+        
+    if (len(rightx)>0) and (len(righty)>0):
+        right_fit = fit_pixles_polynomial(rightx, righty, 1, 1)
+        right_fit_cr = fit_pixles_polynomial(rightx, righty, xm_per_pix, ym_per_pix)
+        right_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, right_fit_cr)
+    else:
+        right_line.detected = False
+    
+    if FLAGS.debug is True:
+        leftx, lefty, rightx, righty = known_fit_finding_lines(warped, left_fit, right_fit)
+    
+    left_fit_x_pos = calculate_x_position(y_eval, left_fit)
+    right_fit_x_pos = calculate_x_position(y_eval, right_fit)    
+        
+    left_line.current_fit = left_fit
+    right_line.current_fit = right_fit
     
     if (left_fit_x_pos<=image.shape[1]/2) and (left_fit_x_pos>=0):
         left_line.detected = True
