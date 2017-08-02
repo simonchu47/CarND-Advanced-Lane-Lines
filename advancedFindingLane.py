@@ -33,16 +33,21 @@ flags.DEFINE_string('image_path', '', "The input image file path")
 flags.DEFINE_string('video_path', '', "The input video file path")
 flags.DEFINE_bool('perspective', False, "Generate perspective transform matrix")
 flags.DEFINE_bool('debug', False, "Generate perspective transform matrix")
+flags.DEFINE_bool('dynamic_filter', False, "Generate perspective transform matrix")
 
 class Line():
     def __init__(self):
         # was the line detected in the last iteration?
-        self.detected = False  
+        self.detected = False
+        # the number of last iterations to keep
+        self.n = 5
         # x values of the last n fits of the line
-        self.recent_xfitted = [] 
+        #self.recent_xfitted = [] 
+        self.recent_xfitted = deque()
         #average x values of the fitted line over the last n iterations
         self.bestx = None     
         #polynomial coefficients averaged over the last n iterations
+        self.recent_line_fit = deque()
         self.best_fit = None  
         #polynomial coefficients for the most recent fit
         self.current_fit = [np.array([False])]  
@@ -56,10 +61,49 @@ class Line():
         self.allx = None  
         #y values for detected line pixels
         self.ally = None
+        #l channel value of the road for last n iterations
+        self.recent_l_ch = deque()
+        #average of l channel value of the road for last n iterations
+        self.average_l_ch = None
     def check_last_detected(self):
         return self.detected
+    def keep_last_iterations(self, x, fit):
+        if len(self.recent_xfitted)<self.n :
+            self.recent_xfitted.appendleft(x)
+            self.recent_line_fit.appendleft(fit)
+        else:
+            self.recent_xfitted.pop()
+            self.recent_xfitted.appendleft(x)
+            self.recent_line_fit.pop()
+            self.recent_line_fit.appendleft(fit)
+    def average_last_iterations(self):
+        self.bestx = sum(self.recent_xfitted)/len(self.recent_xfitted)
+        self.best_fit = sum(self.recent_line_fit)/len(self.recent_line_fit)
+
+class dynamic_parameters():
+    def __init__(self):
+        # the number of last iterations to keep
+        self.n = 5
+        #l channel value of the road for last n iterations
+        self.recent_l_ch = deque()
+        #average of l channel value of the road for last n iterations
+        self.average_l_ch = None
+    
+    def keep_and_average_l_ch(self, l_ch):
+        if len(self.recent_l_ch)<self.n :
+            self.recent_l_ch.appendleft(l_ch)
+        else:
+            self.recent_l_ch.pop()
+            self.recent_l_ch.appendleft(l_ch)
+            
+        self.average_l_ch = int(sum(self.recent_l_ch)/len(self.recent_l_ch))            
+        return self.average_l_ch
+
 left_line = Line()
 right_line = Line()
+
+if FLAGS.dynamic_filter is True:
+    dynamic_par = dynamic_parameters()
     
 def grayscale(img):
     # Applies the Grayscale transform    
@@ -223,11 +267,14 @@ def gen_perspective_trans_matrix(image):
     M = cv2.getPerspectiveTransform(src, dst)
     rM = cv2.getPerspectiveTransform(dst, src)
     
-    #img_size = (image.shape[1], image.shape[0])
-    #mixed_image = weighted_img(line_image, image)
-    #warped = cv2.warpPerspective(image, M, img_size, flags=cv2.INTER_LINEAR)
-    #cv2.imwrite('./perspective_lines.jpg', mixed_image)
-    #cv2.imwrite('./perspective_trans.jpg', warped)
+    if FLAGS.debug is True:
+        img_size = (image.shape[1], image.shape[0])
+        mixed_image = weighted_img(line_image, image)
+        warped = cv2.warpPerspective(image, M, img_size, flags=cv2.INTER_LINEAR)
+        filename = FLAGS.image_path.split('/')[-1].split('.')[0]
+        cv2.imwrite('./'+filename+'_perspective_lines.jpg', mixed_image)
+        cv2.imwrite('./'+filename+'_perspective_trans.jpg', warped)
+        
     return M, rM    
 
 def hls_filter(image, h_bottom, h_upper, l_bottom, l_upper, s_bottom, s_upper):
@@ -245,11 +292,8 @@ def hls_filter(image, h_bottom, h_upper, l_bottom, l_upper, s_bottom, s_upper):
     filtered_l = np.zeros_like(l_channel, dtype=np.bool)
     filtered_l[(l_channel<l_upper) & (l_channel>l_bottom)] = True
 
-    #combined =  np.zeros_like(image)
     condition = filtered_h & filtered_s & filtered_l
-    #combined[condition] = image[condition]
     
-    #return combined
     return condition
     
 def sobel_filter(binary_image, low_thres, high_thres):
@@ -362,51 +406,6 @@ def calculate_x_position(y_position, line_fit):
     x_position = line_fit[0]*y_position**2 + line_fit[1]*y_position + line_fit[2]
     return x_position
 
-    """    
-    # Fit a second order polynomial to each
-    if (len(leftx)>0) and (len(lefty)>0):
-        left_fit = np.polyfit(lefty, leftx, 2)
-        left_fit_cr = np.polyfit(lefty*ym_per_pix, leftx*xm_per_pix, 2)
-    else:
-        left_fit_cr = []
-    
-    if (len(rightx)>0) or (len(righty)>0):
-        right_fit = np.polyfit(righty, rightx, 2)
-        right_fit_cr = np.polyfit(righty*ym_per_pix, rightx*xm_per_pix, 2)
-    else:
-        right_fit_cr = []
-    
-    # Fit new polynomials to x,y in world space
-    #left_fit_cr = np.polyfit(lefty*ym_per_pix, leftx*xm_per_pix, 2)
-    #right_fit_cr = np.polyfit(righty*ym_per_pix, rightx*xm_per_pix, 2)
-    # The bottom of the image 
-    y_eval = binary_warped.shape[0] - 1
-    # Calculate the new radii of curvature
-    left_curverad = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])
-    right_curverad = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])
-    print("left_curvature is {}".format(left_curverad))
-    print("right_curvature is {}".format(right_curverad))
-    
-    left_fit_x_pos = left_fit[0]*y_eval**2 + left_fit[1]*y_eval + left_fit[2]
-    right_fit_x_pos = right_fit[0]*y_eval**2 + right_fit[1]*y_eval + right_fit[2]
-    """
-    
-    """
-    # Generate x and y values for plotting
-    ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
-    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
-    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
-    
-    out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
-    out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
-    plt.imshow(out_img)
-    plt.plot(left_fitx, ploty, color='yellow')
-    plt.plot(right_fitx, ploty, color='yellow')
-    plt.xlim(0, 1280)
-    plt.ylim(720, 0)
-    plt.savefig("./test1_sliding_windows.jpg")
-    """
-
 def known_fit_finding_lines(binary_warped, left_fit, right_fit):
     # Assume you now have a new warped binary image 
     # from the next frame of video (also called "binary_warped")
@@ -424,8 +423,7 @@ def known_fit_finding_lines(binary_warped, left_fit, right_fit):
     rightx = nonzerox[right_lane_inds]
     righty = nonzeroy[right_lane_inds]
     
-    if FLAGS.debug is True:
-        
+    if FLAGS.debug is True:        
         # Generate x and y values for plotting
         ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
         left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
@@ -459,74 +457,7 @@ def known_fit_finding_lines(binary_warped, left_fit, right_fit):
         filename = FLAGS.image_path.split('/')[-1].split('.')[0]
         plt.savefig("./"+filename+"_known_fit.jpg")  
     
-    return leftx, lefty, rightx, righty
-    
-    
-    """    
-    # Fit a second order polynomial to each    
-    if (len(leftx)>0) and (len(lefty)>0):
-        left_fit = np.polyfit(lefty, leftx, 2)
-    else:
-        lefty=np.linspace(0, binary_warped.shape[0]-1, num=binary_warped.shape[0])
-        leftx = np.array([left_fit[0]*y**2 + left_fit[1]*y + left_fit[2] 
-                              for y in lefty])
-        leftx = leftx[::-1]  # Reverse to match top-to-bottom in y
-    
-    if (len(rightx)>0) or (len(righty)>0):
-        right_fit = np.polyfit(righty, rightx, 2)
-    else:
-        righty=np.linspace(0, binary_warped.shape[0]-1, num=binary_warped.shape[0])
-        rightx = np.array([right_fit[0]*y**2 + right_fit[1]*y + right_fit[2] 
-                              for y in righty])
-    
-    # Fit new polynomials to x,y in world space
-    left_fit_cr = np.polyfit(lefty*ym_per_pix, leftx*xm_per_pix, 2)
-    right_fit_cr = np.polyfit(righty*ym_per_pix, rightx*xm_per_pix, 2)
-    # The bottom of the image 
-    y_eval = binary_warped.shape[0] - 1
-    # Calculate the new radii of curvature
-    left_curverad = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])
-    right_curverad = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])
-    
-    left_fit_x_pos = left_fit[0]*y_eval**2 + left_fit[1]*y_eval + left_fit[2]
-    right_fit_x_pos = right_fit[0]*y_eval**2 + right_fit[1]*y_eval + right_fit[2]
-    """    
-    
-
-    
-    """
-    # Generate x and y values for plotting
-    ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
-    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
-    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
-
-    # Create an image to draw on and an image to show the selection window
-    out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255
-    window_img = np.zeros_like(out_img)
-    # Color in left and right line pixels
-    out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
-    out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
-
-    # Generate a polygon to illustrate the search window area
-    # And recast the x and y points into usable format for cv2.fillPoly()
-    left_line_window1 = np.array([np.transpose(np.vstack([left_fitx-margin, ploty]))])
-    left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx+margin, ploty])))])
-    left_line_pts = np.hstack((left_line_window1, left_line_window2))
-    right_line_window1 = np.array([np.transpose(np.vstack([right_fitx-margin, ploty]))])
-    right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx+margin, ploty])))])
-    right_line_pts = np.hstack((right_line_window1, right_line_window2))
-    
-    # Draw the lane onto the warped blank image
-    cv2.fillPoly(window_img, np.int_([left_line_pts]), (0,255, 0))
-    cv2.fillPoly(window_img, np.int_([right_line_pts]), (0,255, 0))
-    result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
-    plt.imshow(result)
-    plt.plot(left_fitx, ploty, color='yellow')
-    plt.plot(right_fitx, ploty, color='yellow')
-    plt.xlim(0, 1280)
-    plt.ylim(720, 0)
-    #plt.savefig("./test1_known_fit.jpg")
-    """
+    return leftx, lefty, rightx, righty    
 
 def draw_lane(image, left_fit, right_fit, Minv):
     # Create an image to draw the lines on
@@ -553,7 +484,19 @@ def draw_lane(image, left_fit, right_fit, Minv):
     result = cv2.addWeighted(image, 1, newwarp, 0.3, 0)
     
     return result
-        
+
+def dynamic_parameters(image):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HLS).astype(np.float)
+    l_channel = hsv[:,:,1]
+    points = [[640,540],[620,540],[660,540],[640,520],[640,560]] 
+    l_values = []
+    for p in points:
+        x = p[0]-1
+        y = p[1]-1
+        l_values.append(l_channel[y][x])
+    l_average = sum(l_values)/len(l_values)
+    return int(l_average)
+
 # The following is to process the calibration of camera
 # Decided by the command flags
 nx = FLAGS.x_corners
@@ -566,7 +509,6 @@ objp[:,:2] = np.mgrid[0:nx, 0:ny].T.reshape(-1,2)
 # Arrays to store object points and image points from all the images.
 objpoints = [] # 3d points in real world space
 imgpoints = [] # 2d points in image plane.
-
 
 if FLAGS.calibration_camera is True:
     if FLAGS.calibration_path is not "":
@@ -597,9 +539,11 @@ if FLAGS.calibration_camera is True:
         img_size = (img.shape[1], img.shape[0])
         # Do camera calibration given object points and image points
         ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, img_size, None, None)
+        
         dst = cv2.undistort(img, mtx, dist, None, mtx)
-        cv2.imshow('undistorted_img', dst)
-        #cv2.imwrite('./test_undist.jpg',dst)
+        #cv2.imshow('undistorted_img', dst)
+        filename = test_img_file.split('/')[-1].split('.')[0]
+        cv2.imwrite('./test_undist'+filename+'.jpg', dst)
         
         # Save the camera calibration result for later use (we won't worry about rvecs / tvecs)
         dist_pickle = {}
@@ -609,7 +553,7 @@ if FLAGS.calibration_camera is True:
 
     else:
          print("Please add the calibration_path flag...")       
-    #print(cali_files)
+
 else:
     # Read in the camera matrix and distortion coefficients
     camera_calibration_pickle = "./camera_calibration_pickle.p"
@@ -647,81 +591,43 @@ else:
         print("Sorry!, no perspective transormation pickle...")
 
 # The Pipeline
-#def pipeline(image, s_thresh=(170, 255), h_g_thresh=(20, 200), r_thresh=(20, 100)):
-def pipeline(image, h_thresh=(98.0, 102.0), l_thresh=(200.0, 255.0), s_thresh=(170.0, 255.0), sobel_thresh=(80.0, 255.0)):
-    
+def pipeline(image):    
     # Define conversions in x and y from pixels space to meters
     ym_per_pix = 30/720 # meters per pixel in y dimension
     xm_per_pix = 3.7/700 # meters per pixel in x dimension
     
     # Performs image distortion correction
     undist = cv2.undistort(image, mtx, dist, None, mtx)
-    
-    """
-    # Convert to HSV color space and separate the V channel
-    hsv = cv2.cvtColor(undist, cv2.COLOR_RGB2HLS).astype(np.float)
-    h_channel = hsv[:,:,0]
-    s_channel = hsv[:,:,2]
-    # Sobel x
-    sobelx = cv2.Sobel(h_channel, cv2.CV_64F, 1, 0) # Take the derivative in x
-    sobely = cv2.Sobel(h_channel, cv2.CV_64F, 0, 1) # Take the derivative in y
-    sobel_mag = np.sqrt(np.square(sobelx)+np.square(sobely))
-    #abs_sobelx = np.absolute(sobelx) # Absolute x derivative to accentuate lines away from horizontal
-    scaled_sobel = np.uint8(255*sobel_mag/np.max(sobel_mag))
-    
-    # Threshold x gradient
-    hgbinary = np.zeros_like(scaled_sobel)
-    hgbinary[(scaled_sobel >= h_g_thresh[0]) & (scaled_sobel <= h_g_thresh[1])] = 1
-    
-    # Threshold color channel
-    s_binary = np.zeros_like(s_channel)
-    s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
-    # Stack each channel
-    # Note color_binary[:, :, 0] is all 0s, effectively an all black image. It might
-    # be beneficial to replace this channel with something else.
-    r_channel = undist[:,:,0]
-    sobel_r = cv2.Sobel(r_channel, cv2.CV_64F, 1, 1)
-    abs_sobelr = np.absolute(sobel_r)
-    scaled_sobelr = np.uint8(255*abs_sobelr/np.max(abs_sobelr))
-    r_sobel_binary = np.zeros_like(scaled_sobelr)
-    r_sobel_binary[(scaled_sobelr>=r_thresh[0]) & (scaled_sobelr<=r_thresh[1])] = 1
-    #color_binary = np.dstack(( np.zeros_like(sxbinary), sxbinary, s_binary))
-    #color_binary = np.dstack((r_sobel_binary , sxbinary, s_binary))
-    combined_binary = np.zeros_like(scaled_sobelr)
-    #combined_binary[(r_sobel_binary==1)|(lgbinary==1)|(s_binary==1)] = 255
-    #combined_binary[(lgbinary==1)|(s_binary==1)] = 255
-    #combined_binary[(s_binary==1)] = 255
-    #combined_binary[(hgbinary==1)] = 255
-    combined_binary[(r_sobel_binary==1)] = 255
-    #combined_binary[(r_sobel_binary==1)|(s_binary==1)] = 255
-    """
-    #hls_filtered = hls_filter(undist, h_thresh[0], h_thresh[1], l_thresh[0], l_thresh[1], s_thresh[0], s_thresh[1])
+
+    # Using HLS color space filter to find out yellow line and white line
     yellow_line_filter = hls_filter(undist, 90.0, 101.0, 0.0, 255.0, 50.0, 255.0)
-    white_line_filter = hls_filter(undist, 0.0, 180.0, 210.0, 255.0, 0.0, 255.0)
-    
-    #Sobel filter with R channel
+    #white_line_filter = hls_filter(undist, 0.0, 180.0, 210.0, 255.0, 0.0, 255.0)
+    #Using average of l channel vaalue of road for 5 last iterations as threshold when dynamic filter flag is on
+    if FLAGS.dynamic_filter is True:
+        l_average_current = dynamic_parameters(image)
+        l_average = dynamic_par.keep_and_average_l_ch(l_average_current)
+        l_low_thres = l_average + 30.0
+        white_line_filter = hls_filter(undist, 0.0, 180.0, l_low_thres, 255.0, 0.0, 255.0)
+    else:
+        white_line_filter = hls_filter(undist, 0.0, 180.0, 210.0, 255.0, 0.0, 255.0)
+        
+    # Using Sobel filter with R channel, to find out more white line edges
     r_ch_sobel_filter = sobel_filter(undist[:,:,0], 70.0, 255.0)
     
-    hls_filtered = np.zeros_like(undist)
+    # Union all the filters
+    undist_filtered = np.zeros_like(undist)
     all_filter = yellow_line_filter | white_line_filter | r_ch_sobel_filter
-    hls_filtered[all_filter] = undist[all_filter]
+    undist_filtered[all_filter] = undist[all_filter]
     
     if FLAGS.debug is True:
         filename = FLAGS.image_path.split('/')[-1].split('.')[0]
-        cv2.imwrite('./'+filename+'_hls_filtered.jpg', cv2.cvtColor(hls_filtered, cv2.COLOR_BGR2RGB))
+        cv2.imwrite('./'+filename+'_filtered.jpg', cv2.cvtColor(undist_filtered, cv2.COLOR_BGR2RGB))
 
-    gray_filtered = cv2.cvtColor(hls_filtered, cv2.COLOR_BGR2GRAY)
-    
-    """
-    sobel = cv2.Sobel(gray_filtered, cv2.CV_64F, 1, 1)
-    abs_sobel = np.absolute(sobel)
-    scaled_sobel = np.uint8(255*abs_sobel/np.max(abs_sobel))
-    sobel_binary = np.zeros_like(scaled_sobel)
-    sobel_binary[(scaled_sobel>=sobel_thresh[0]) & (scaled_sobel<=sobel_thresh[1])] = 255
-    """
-    
+    gray_filtered = cv2.cvtColor(undist_filtered, cv2.COLOR_BGR2GRAY)    
     combined_binary = np.zeros_like(gray_filtered)
     combined_binary[gray_filtered>0] = 255
+    
+    # Performs perspective transforming               
     warped = cv2.warpPerspective(combined_binary, M, (combined_binary.shape[1], combined_binary.shape[0]), flags=cv2.INTER_LINEAR)
     
     if FLAGS.debug is True:
@@ -732,8 +638,10 @@ def pipeline(image, h_thresh=(98.0, 102.0), l_thresh=(200.0, 255.0), s_thresh=(1
     y_eval = warped.shape[0] - 1
                                 
     if left_line.check_last_detected() == True and left_line.check_last_detected() == True:
-        left_fit = left_line.current_fit
-        right_fit = right_line.current_fit
+        #left_fit = left_line.current_fit
+        left_fit = left_line.best_fit
+        #right_fit = right_line.current_fit
+        right_fit = right_line.best_fit
         leftx, lefty, rightx, righty = known_fit_finding_lines(warped, left_fit, right_fit)
     else:
         leftx, lefty, rightx, righty = sliding_windows_finding_lines(warped)
@@ -744,6 +652,7 @@ def pipeline(image, h_thresh=(98.0, 102.0), l_thresh=(200.0, 255.0), s_thresh=(1
         left_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, left_fit_cr)
     else:
         left_line.detected = False
+        left_fit = left_line.best_fit
         
     if (len(rightx)>0) and (len(righty)>0):
         right_fit = fit_pixles_polynomial(rightx, righty, 1, 1)
@@ -751,6 +660,7 @@ def pipeline(image, h_thresh=(98.0, 102.0), l_thresh=(200.0, 255.0), s_thresh=(1
         right_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, right_fit_cr)
     else:
         right_line.detected = False
+        right_fit = right_line.best_fit
     
     if FLAGS.debug is True:
         leftx, lefty, rightx, righty = known_fit_finding_lines(warped, left_fit, right_fit)
@@ -761,90 +671,69 @@ def pipeline(image, h_thresh=(98.0, 102.0), l_thresh=(200.0, 255.0), s_thresh=(1
     left_line.current_fit = left_fit
     right_line.current_fit = right_fit
     
-    if (left_fit_x_pos<=image.shape[1]/2) and (left_fit_x_pos>=0):
-        left_line.detected = True
+    if (left_fit_x_pos<=image.shape[1]/2) and (left_fit_x_pos>0):
+        #left_line.detected = True
+        left_line.keep_last_iterations(left_fit_x_pos, left_fit)
+        left_line.average_last_iterations()
+        left_line.line_base_pos = (image.shape[1]/2-left_fit_x_pos)*xm_per_pix
+        left_laneline_base_pos = "Left Line Position.:  {}".format(left_line.line_base_pos)+' m'
     else:
         left_line.detected = False
+        left_laneline_base_pos = "Left Line Position.: <<<<<"
         
-    if (right_fit_x_pos<=image.shape[1]) and (left_fit_x_pos>=left_fit_x_pos<image.shape[1]/2):
-        right_line.detected = True
+    if (right_fit_x_pos<image.shape[1]) and (left_fit_x_pos>=left_fit_x_pos<image.shape[1]/2):
+        #right_line.detected = True
+        right_line.keep_last_iterations(right_fit_x_pos, right_fit)
+        right_line.average_last_iterations()
+        right_line.line_base_pos = (right_fit_x_pos-image.shape[1]/2)*xm_per_pix
+        right_laneline_base_pos = "Right Line Position.: {}".format(right_line.line_base_pos)+' m'
     else:
         right_line.detected = False
+        right_laneline_base_pos = "Right Line Position.: >>>>>"
     
-    #print(left_line.current_fit)
-    #print(right_line.current_fit)
-    
-    #result = np.dstack((combined_binary, combined_binary, combined_binary))
-    #result = hls_filtered
-    #result = np.dstack((sobel_binary, sobel_binary, sobel_binary))
-    
+    # Draws lane on the original image
     lane_drawing = draw_lane(image, left_fit, right_fit, rM)
     result = lane_drawing
-        
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    left_laneline = "Left Line Curve Rad.:  {}".format(left_line.radius_of_curvature)+' m'
+    right_laneline = "Right Line Curve Rad.: {}".format(right_line.radius_of_curvature)+' m'
+    cv2.putText(result,left_laneline,(10,100), font, 0.5,(255,255,255),1,cv2.LINE_AA)
+    cv2.putText(result,right_laneline,(10,120), font, 0.5,(255,255,255),1,cv2.LINE_AA)
+    cv2.putText(result,left_laneline_base_pos,(10,140), font, 0.5,(255,255,255),1,cv2.LINE_AA)
+    cv2.putText(result,right_laneline_base_pos,(10,160), font, 0.5,(255,255,255),1,cv2.LINE_AA)    
     return result
 
-def main(__):
-    if FLAGS.image is True:
-        if FLAGS.image_path is not "":
-            if os.path.isfile(FLAGS.image_path) is True:
-                filename = FLAGS.image_path.split('/')[-1].split('.')[0]
-                #img = cv2.imread(FLAGS.image_path)
-                img = mpimg.imread(FLAGS.image_path)
-                result = pipeline(img)
-                f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
-                ax2.imshow(result)
-                cv2.imwrite('./'+filename+'_drawing_lane.jpg', cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
+def main(__):    
+    if (FLAGS.calibration_camera == False) and (FLAGS.perspective == False):        
+        if FLAGS.image is True:
+            if FLAGS.image_path is not "":
+                if os.path.isfile(FLAGS.image_path) is True:
+                    filename = FLAGS.image_path.split('/')[-1].split('.')[0]
+                    #img = cv2.imread(FLAGS.image_path)
+                    img = mpimg.imread(FLAGS.image_path)
+                    result = pipeline(img)
+                    #f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
+                    #ax2.imshow(result)
+                    
+                    cv2.imwrite('./'+filename+'_drawing_lane.jpg', cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
+                else:
+                    print("There is no input image...")
             else:
-                print("There is no input image...")
-        else:
-            print("Please add the input image path...")
-    elif FLAGS.video is True:
-        if FLAGS.video_path is not "":
-            if os.path.isfile(FLAGS.video_path) is True:
-                filename = FLAGS.video_path.split('/')[-1].split('.')[0]
-                clip1 = VideoFileClip(FLAGS.video_path)
-                drawing_lane_clip = clip1.fl_image(pipeline)
-                drawing_lane_clip.write_videofile('./'+filename+'_drawing_lane.mp4', audio=False)
+                print("Please add the input image path...")
+        elif FLAGS.video is True:
+            if FLAGS.video_path is not "":
+                if os.path.isfile(FLAGS.video_path) is True:
+                    filename = FLAGS.video_path.split('/')[-1].split('.')[0]
+                    clip1 = VideoFileClip(FLAGS.video_path)
+                    drawing_lane_clip = clip1.fl_image(pipeline)
+                    drawing_lane_clip.write_videofile('./'+filename+'_drawing_lane.mp4', audio=False)
+                else:
+                    print("There is no input video...")
             else:
-                print("There is no input video...")
+                print("Please add the input video path...")
         else:
-            print("Please add the input video path...")
-    else:
-        print("Please add image or video flag...")
-
+            print("Please add image or video flag...")
+    
 # parses flags and calls the `main` function above
 if __name__ == '__main__':
     tf.app.run()
-
-
-"""
-# Read in the saved objpoints and imgpoints
-dist_pickle = pickle.load( open( "wide_dist_pickle.p", "rb" ) )
-objpoints = dist_pickle["objpoints"]
-imgpoints = dist_pickle["imgpoints"]
-
-# Read in an image
-img = cv2.imread('test_image.png')
-
-# TODO: Write a function that takes an image, object points, and image points
-# performs the camera calibration, image distortion correction and 
-# returns the undistorted image
-def cal_undistort(img, objpoints, imgpoints):
-    # Use cv2.calibrateCamera() and cv2.undistort()
-    #undist = np.copy(img)  # Delete this line
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
-    undist = cv2.undistort(img, mtx, dist, None, mtx)
-    return undist
-
-undistorted = cal_undistort(img, objpoints, imgpoints)
-
-f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
-f.tight_layout()
-ax1.imshow(img)
-ax1.set_title('Original Image', fontsize=50)
-ax2.imshow(undistorted)
-ax2.set_title('Undistorted Image', fontsize=50)
-plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
-
-"""
