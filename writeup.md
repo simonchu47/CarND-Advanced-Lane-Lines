@@ -1,10 +1,5 @@
-## Writeup Template
 
-### You can use this file as a template for your writeup if you want to submit it as a markdown file, but feel free to use some other method and submit a pdf if you prefer.
-
----
-
-**Advanced Lane Finding Project**
+##Advanced Lane Finding Project
 
 The goals / steps of this project are the following:
 
@@ -19,13 +14,14 @@ The goals / steps of this project are the following:
 
 [//]: # (Image References)
 
-[image1]: ./examples/undistort_output.png "Undistorted"
-[image2]: ./test_images/test1.jpg "Road Transformed"
-[image3]: ./examples/binary_combo_example.jpg "Binary Example"
-[image4]: ./examples/warped_straight_lines.jpg "Warp Example"
-[image5]: ./examples/color_fit_lines.jpg "Fit Visual"
-[image6]: ./examples/example_output.jpg "Output"
-[video1]: ./project_video.mp4 "Video"
+[image1]: ./examples/undistorted.jpg "Undistorted"
+[image2]: ./examples/undistorted_test5.jpg "Road Transformed"
+[image3]: ./examples/test5_filtered.jpg "Filtered Image"
+[image4]: ./examples/dynamic_filter.jpg "Filtered Image"
+[image5]: ./examples/perspective_transformed.jpg "Warp Example"
+[image6]: ./examples/finding_pixels.jpg "Fit Visual"
+[image7]: ./examples/test5_drawing_lane "Output"
+[video1]: ./examples/project_video_drawing_lane_normal "Video"
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
 
@@ -35,15 +31,15 @@ The goals / steps of this project are the following:
 
 ### Writeup / README
 
-#### 1. Provide a Writeup / README that includes all the rubric points and how you addressed each one.  You can submit your writeup as markdown or pdf.  [Here](https://github.com/udacity/CarND-Advanced-Lane-Lines/blob/master/writeup_template.md) is a template writeup for this project you can use as a guide and a starting point.  
+#### 1. Provide a Writeup / README that includes all the rubric points and how I addressed each one.  
 
 You're reading it!
 
 ### Camera Calibration
 
-#### 1. Briefly state how you computed the camera matrix and distortion coefficients. Provide an example of a distortion corrected calibration image.
+#### 1. Briefly state how I computed the camera matrix and distortion coefficients.
 
-The code for this step is contained in the first code cell of the IPython notebook located in "./examples/example.ipynb" (or in lines # through # of the file called `some_file.py`).  
+The code for this step is contained in the in lines 555 through 623 of the file called `advancedFindingLane.py`.  
 
 I start by preparing "object points", which will be the (x, y, z) coordinates of the chessboard corners in the world. Here I am assuming the chessboard is fixed on the (x, y) plane at z=0, such that the object points are the same for each calibration image.  Thus, `objp` is just a replicated array of coordinates, and `objpoints` will be appended with a copy of it every time I successfully detect all chessboard corners in a test image.  `imgpoints` will be appended with the (x, y) pixel position of each of the corners in the image plane with each successful chessboard detection.  
 
@@ -60,55 +56,43 @@ To demonstrate this step, I will describe how I apply the distortion correction 
 
 #### 2. Describe how (and identify where in your code) you used color transforms, gradients or other methods to create a thresholded binary image.  Provide an example of a binary image result.
 
-I used a combination of color and gradient thresholds to generate a binary image (thresholding steps at lines # through # in `another_file.py`).  Here's an example of my output for this step.  (note: this is not actually from one of the test images)
+I used a union of two HLS color space filters and one R channel gradient filter to generate a binary image (thresholding steps at lines 666 through 684 in `advancedFindingLane.py`). One HLS filter is to find out the pixels which represents the yellow lines, and the other one is for white lines. The R channel gradient filter is to find out more white lines' edges.
+
+'Here's an example of the filterd image for this step. 
 
 ![alt text][image3]
 
-#### 3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
+In addition, a dynamic filter concept was also designed in. When the funtion is enabled via command line as `--dynamic_filter`, on each frame, the lower threshold of L channel for white line HLS filter is decided according to the average of L channel value of the road surface for the last 5 iterations. That is to increase the robustness of the lane detection.
 
-The code for my perspective transform includes a function called `warper()`, which appears in lines 1 through 8 in the file `example.py` (output_images/examples/example.py) (or, for example, in the 3rd code cell of the IPython notebook).  The `warper()` function takes as inputs an image (`img`), as well as source (`src`) and destination (`dst`) points.  I chose the hardcode the source and destination points in the following manner:
-
-```python
-src = np.float32(
-    [[(img_size[0] / 2) - 55, img_size[1] / 2 + 100],
-    [((img_size[0] / 6) - 10), img_size[1]],
-    [(img_size[0] * 5 / 6) + 60, img_size[1]],
-    [(img_size[0] / 2 + 55), img_size[1] / 2 + 100]])
-dst = np.float32(
-    [[(img_size[0] / 4), 0],
-    [(img_size[0] / 4), img_size[1]],
-    [(img_size[0] * 3 / 4), img_size[1]],
-    [(img_size[0] * 3 / 4), 0]])
-```
-
-This resulted in the following source and destination points:
-
-| Source        | Destination   | 
-|:-------------:|:-------------:| 
-| 585, 460      | 320, 0        | 
-| 203, 720      | 320, 720      |
-| 1127, 720     | 960, 720      |
-| 695, 460      | 960, 0        |
-
-I verified that my perspective transform was working as expected by drawing the `src` and `dst` points onto a test image and its warped counterpart to verify that the lines appear parallel in the warped image.
+'Here's an example of the filtered image with dynamic filter function enabled. From the challenge video, beneath the bridge, if the original fixed threshold filter is used, there is no pixel of road surface part left on the image. But if the dynamic threshold filter is used, the pixels representing white lines are left.
 
 ![alt text][image4]
 
-#### 4. Describe how (and identify where in your code) you identified lane-line pixels and fit their positions with a polynomial?
+#### 3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
 
-Then I did some other stuff and fit my lane lines with a 2nd order polynomial kinda like this:
+The code for my perspective transform includes the functions from Project 1, which appears in lines 119 through 291 in the file `advancedFindingLane.py`. The `gen_perspective_trans_matrix()` function takes as inputs an image (`img`) and automatically generates source (`src`) and destination (`dst`) points.  The method is from Project 1 implementation, which finds out two straight lines which represent the left and right edge of the lane respectively. The start and end points of both lines form the four corners of a trapezoid which should become rectangular after perspective transformation.
+
+I verified that my perspective transform was working as expected by apply the `gen_perspective_trans_matrix()`function onto a test image and its warped counterpart to verify that the lines appear parallel in the warped image.
 
 ![alt text][image5]
 
+#### 4. Describe how (and identify where in your code) you identified lane-line pixels and fit their positions with a polynomial?
+
+Then there are two methods implemented to find out lane-line pixels and fit the lane lines with a 2nd order polynomial. The first one is sliding window method, which needs more calculation power. But if both the left and right line-fitting are known, the second method would be used, which is more efficient.
+
+And after the pixels are found, `np.polyfit()`is called to get the second order fitting polynomial. All the functions appear in lines 332 through 480 in the file `advancedFindingLane.py`. The following shows the results with sliding window searching method and known fitting searching method respectively.
+
+![alt text][image6]
+
 #### 5. Describe how (and identify where in your code) you calculated the radius of curvature of the lane and the position of the vehicle with respect to center.
 
-I did this in lines # through # in my code in `my_other_file.py`
+The functions are implemented in lines 482 through 503 in my code in `advancedFindingLane.py`, and are called in pipe line, lines 718 through 786 in my code in `advancedFindingLane.py`
 
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
-I implemented this step in lines # through # in my code in `yet_another_file.py` in the function `map_lane()`.  Here is an example of my result on a test image:
+I implemented this step in lines 505 through 530 in my code in `advancedFindingLane.py` in the function `draw_lane()`.  Here is an example of my result on a test image:
 
-![alt text][image6]
+![alt text][image7]
 
 ---
 
@@ -116,7 +100,7 @@ I implemented this step in lines # through # in my code in `yet_another_file.py`
 
 #### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
 
-Here's a [link to my video result](./project_video.mp4)
+Here's a [video1](./examples/project_video_drawing_lane_normal.mp4)
 
 ---
 
@@ -124,4 +108,33 @@ Here's a [link to my video result](./project_video.mp4)
 
 #### 1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
 
-Here I'll talk about the approach I took, what techniques I used, what worked and why, where the pipeline might fail and how I might improve it if I were going to pursue this project further.  
+1. The automatic generation of perspective transformation matrix is implemented. Without hard code I used the hough line methods to find out the four corners for before and after the perspective transformation. It's pretty convenient, but of course, you have to make sure that the picture you used must have a straight lane in front of you.
+
+2. The union of multiples of HLS color space filters are used. Each filter is designed for specific function. For example, one for finding out yellow lines and another one for white lines. It's almost impossible to find out both yellow and white lines through one set of HLS thresholds.
+
+3. The R channel gradients filter is added into the union of the filters. The R-ch gradients filter is to help the white-lines filter to find out more edges of white lines. It also could help yellow-lines filter, but it might cause some side effects that leave unnecessary pixels when noises appear on the image, such as shadows or taints on the road surface.
+
+4. The dynamic filter concept is designed in. The implementation is for the white-line filter, for the reason that the lower threshold of L channel is sensible to the environments. The setting for project video is not suitable for challenge video. Even on the same video, there might be different environments, such as beneath a bridge. But the method has to run with a good algorithm for how to modify the parameters. Currently I just added 30 to the measured L ch. value of road surface for the lower threshold. That's simple but creates limited improvements. I would develop more advanced algorithm for more other filters to gain more robustness.
+The following is a demo with or without dynamic filter function enabled, and you can see the improvements.
+
+    Without dynamic filter [video2](./examples/challenge_video_drawing_lane_normal.mp4)
+
+    With dynamic filter [video3](./examples/challenge_video_drawing_lane_dy.mp4)
+
+5. The moving average is used on the line-fitting polynomials' coefficients for last several iterations. On each frame the program records the averaged polynomial on which the searching for line pixels is based. The averaged polynomial is also used for the lane drawing and calculation of vehicle center. It works like a low pass filter and prevents jitters.
+The following is the same video as above but with the moving average function enabled.
+
+    With moving average function [video4](./examples/challenge_video_drawing_lane_ma.mp4)
+
+6. If both dynamic filter and moving average methods are used, the performance would be more stable, like the following demo.
+    
+    [video5](./examples/challenge_video_drawing_lane_ma_dy.mp4)
+
+
+
+
+
+
+
+
+

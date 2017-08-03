@@ -33,8 +33,10 @@ flags.DEFINE_string('image_path', '', "The input image file path")
 flags.DEFINE_string('video_path', '', "The input video file path")
 flags.DEFINE_bool('perspective', False, "Generate perspective transform matrix")
 flags.DEFINE_bool('debug', False, "Generate perspective transform matrix")
-flags.DEFINE_bool('dynamic_filter', False, "Generate perspective transform matrix")
+flags.DEFINE_bool('dynamic_filter', False, "Decide wether or not to use dynamic filter")
+flags.DEFINE_bool('moving_average', False, "Decide wether or not to use moving average of fitting polynomials")
 
+# Keeps records of data of left or right lane line mark for each frame
 class Line():
     def __init__(self):
         # was the line detected in the last iteration?
@@ -46,8 +48,9 @@ class Line():
         self.recent_xfitted = deque()
         #average x values of the fitted line over the last n iterations
         self.bestx = None     
-        #polynomial coefficients averaged over the last n iterations
+        #polynomial coefficients for the last n iterations
         self.recent_line_fit = deque()
+        #polynomial coefficients averaged over the last n iterations
         self.best_fit = None  
         #polynomial coefficients for the most recent fit
         self.current_fit = [np.array([False])]  
@@ -60,13 +63,13 @@ class Line():
         #x values for detected line pixels
         self.allx = None  
         #y values for detected line pixels
-        self.ally = None
-        #l channel value of the road for last n iterations
-        self.recent_l_ch = deque()
-        #average of l channel value of the road for last n iterations
-        self.average_l_ch = None
+        self.ally = None        
+    
+    # Checks the line is detected or not for last iteration     
     def check_last_detected(self):
         return self.detected
+    
+    # Keeps the x value and fit polynomial for last n iterations
     def keep_last_iterations(self, x, fit):
         if len(self.recent_xfitted)<self.n :
             self.recent_xfitted.appendleft(x)
@@ -76,10 +79,17 @@ class Line():
             self.recent_xfitted.appendleft(x)
             self.recent_line_fit.pop()
             self.recent_line_fit.appendleft(fit)
+    
+    # Averages the x value and fit polynomial for last n iterations
     def average_last_iterations(self):
         self.bestx = sum(self.recent_xfitted)/len(self.recent_xfitted)
         self.best_fit = sum(self.recent_line_fit)/len(self.recent_line_fit)
+    
+    # Calculate the difference in fit coefficients between last and new fits
+    def calculate_diff(self):
+        self.diffs = self.recent_line_fit[0]-self.recent_line_fit[1]
 
+# Keep records of the L channel value of road for each frame
 class dynamic_parameters():
     def __init__(self):
         # the number of last iterations to keep
@@ -89,6 +99,7 @@ class dynamic_parameters():
         #average of l channel value of the road for last n iterations
         self.average_l_ch = None
     
+    # Keeps  and averages the L ch. value of the road for last n iterations
     def keep_and_average_l_ch(self, l_ch):
         if len(self.recent_l_ch)<self.n :
             self.recent_l_ch.appendleft(l_ch)
@@ -209,20 +220,19 @@ def draw_lines(img, lines, color=[255, 0, 0], thickness=2):
     
     # For source points I'm grabbing the outer four detected corners
     src_points = np.float32([left_end2, right_end2, right_end1, left_end1])
-    #src_points = np.array([right_end1,right_end2,left_end1,left_end2], dtype=np.float)
+
+    # The four corners will become a rectangular after perspective transformation
     dst_points = np.float32([(left_end1[0], 0), (right_end1[0], 0), (right_end1[0], image_shape[0]), (left_end1[0], image_shape[0])])
-    #dst_points = np.array([right_end1,(right_end1[0], right_end2[1]),left_end1,(left_end1[0], left_end2[1])], dtype=np.float)
+
     points_pickle = {}
     points_pickle["src_points"] = src_points
     points_pickle["dst_points"] = dst_points
     return points_pickle
 
 def hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
-    """
-    `img` should be the output of a Canny transform.
-        
-    Returns an image with hough lines drawn.
-    """
+    
+    # `img` should be the output of a Canny transform.        
+    # Returns an image with hough lines drawn.    
     lines = cv2.HoughLinesP(img, rho, theta, threshold, np.array([]), minLineLength=min_line_len, maxLineGap=max_line_gap)
     line_img = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
     points = draw_lines(line_img, lines)
@@ -231,6 +241,9 @@ def hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
 def weighted_img(img, initial_img, α=0.8, β=1., λ=0.):
     return cv2.addWeighted(initial_img, α, img, β, λ)
     
+# The process to generate the perspective transormation matrix
+# Here the project 1 methods are reused to find out the lane lines
+# After finding out the two lane lines, the four edge points are defined
 def gen_perspective_trans_matrix(image):
     #Grayscale the image
     gray = grayscale(image)
@@ -277,33 +290,46 @@ def gen_perspective_trans_matrix(image):
         
     return M, rM    
 
+# The HLS color space filter used in pipe line
 def hls_filter(image, h_bottom, h_upper, l_bottom, l_upper, s_bottom, s_upper):
+    # Convert from BGR space to HLS space
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HLS).astype(np.float)
     h_channel = hsv[:,:,0]
     l_channel = hsv[:,:,1]
     s_channel = hsv[:,:,2]
-        
+    
+    # Define the filter for H channel thresholds    
     filtered_h = np.zeros_like(h_channel, dtype=np.bool)
     filtered_h[(h_channel<h_upper) & (h_channel>h_bottom)] = True
-        
+    
+    # Define the filter for S channel thresholds    
     filtered_s = np.zeros_like(s_channel, dtype=np.bool)
     filtered_s[(s_channel<s_upper) & (s_channel>s_bottom)] = True
-        
+    
+    # Define the filter for L channel thresholds    
     filtered_l = np.zeros_like(l_channel, dtype=np.bool)
     filtered_l[(l_channel<l_upper) & (l_channel>l_bottom)] = True
 
+    # # Define the filter for the "AND" of all filters
     condition = filtered_h & filtered_s & filtered_l
     
     return condition
     
+# The sobel filter used to find out line edges
 def sobel_filter(binary_image, low_thres, high_thres):
+    # Sobel derivatives
     sobel_image = cv2.Sobel(binary_image, cv2.CV_64F, 1, 1)
     abs_sobel = np.absolute(sobel_image)
+    
+    # Scaled to 0~255
     scaled_sobel = np.uint8(255*abs_sobel/np.max(abs_sobel))
+    
+    # Define the filter for the sobel thresholds
     sobel_condition = np.zeros_like(binary_image, dtype=np.bool)
     sobel_condition[(scaled_sobel>=low_thres) & (scaled_sobel<=high_thres)] = True
     return sobel_condition
 
+# The sliding windows method to find out the pixels for line fitting
 def sliding_windows_finding_lines(binary_warped):
     # Assuming a warped binary image called "binary_warped" is created
     # Take a histogram of the bottom half of the image
@@ -373,6 +399,7 @@ def sliding_windows_finding_lines(binary_warped):
     rightx = nonzerox[right_lane_inds]
     righty = nonzeroy[right_lane_inds]
     
+    # Output the drawing for debug check if needed
     if FLAGS.debug is True:
         left_fit = np.polyfit(lefty, leftx, 2)
         right_fit = np.polyfit(righty, rightx, 2)
@@ -392,20 +419,8 @@ def sliding_windows_finding_lines(binary_warped):
         plt.savefig("./"+filename+"_sliding_windows.jpg")
 
     return leftx, lefty, rightx, righty
-
-
-def fit_pixles_polynomial(pixels_x, pixels_y, unit_x, unit_y):
-    line_fit = np.polyfit(pixels_y*unit_y, pixels_x*unit_x, 2)
-    return line_fit
-
-def calculate_curve_rad(position, line_fit):
-    curverad = ((1 + (2*line_fit[0]*position + line_fit[1])**2)**1.5) / np.absolute(2*line_fit[0])
-    return curverad
-
-def calculate_x_position(y_position, line_fit):
-    x_position = line_fit[0]*y_position**2 + line_fit[1]*y_position + line_fit[2]
-    return x_position
-
+    
+# Finds out the pixels for line fitting if a fitting line has been known
 def known_fit_finding_lines(binary_warped, left_fit, right_fit):
     # Assume you now have a new warped binary image 
     # from the next frame of video (also called "binary_warped")
@@ -459,6 +474,35 @@ def known_fit_finding_lines(binary_warped, left_fit, right_fit):
     
     return leftx, lefty, rightx, righty    
 
+# Fits the pixels for a second order polynomial
+def fit_pixles_polynomial(pixels_x, pixels_y, unit_x, unit_y):
+    line_fit = np.polyfit(pixels_y*unit_y, pixels_x*unit_x, 2)
+    return line_fit
+
+# Calculates the curve radius at one point of a second order polynomial
+def calculate_curve_rad(position, line_fit):
+    curverad = ((1 + (2*line_fit[0]*position + line_fit[1])**2)**1.5) / np.absolute(2*line_fit[0])
+    return curverad
+
+# Calculates the x position given the y position and the fitting second order polynomial
+def calculate_x_position(y_position, line_fit):
+    x_position = line_fit[0]*y_position**2 + line_fit[1]*y_position + line_fit[2]
+    return x_position
+
+# Re-fits the scaled known fitting line for a new second order polynomial
+def fit_scaled_polynomial(image, line_fit, scaler_x, scaler_y):
+    ploty = np.linspace(0, image.shape[0]-1, image.shape[0] )
+    fitx = line_fit[0]*ploty**2 + line_fit[1]*ploty + line_fit[2]
+    new_fit = fit_pixles_polynomial(fitx, ploty, scaler_x, scaler_y)
+    return new_fit
+
+def calculate_vehicle_position(image, left_x, right_x, scaler_x):
+    vehicle_center = image.shape[1]/2
+    lane_center = (left_x+right_x)/2
+    position = (vehicle_center-lane_center)*scaler_x
+    return position
+        
+# Draws the found lane on the original image
 def draw_lane(image, left_fit, right_fit, Minv):
     # Create an image to draw the lines on
     #warp_zero = np.zeros_like(binary_warped).astype(np.uint8)
@@ -485,10 +529,21 @@ def draw_lane(image, left_fit, right_fit, Minv):
     
     return result
 
+# Selects five points on the image to measure the average of the L channel values
+# The average value represents the current L ch. value of the road
 def dynamic_parameters(image):
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HLS).astype(np.float)
     l_channel = hsv[:,:,1]
-    points = [[640,540],[620,540],[660,540],[640,520],[640,560]] 
+    x_center = int(image.shape[1]/2)
+    x_shift = int(image.shape[1]/64)
+    y_center = int(image.shape[0]*3/4)
+    y_shift = int(image.shape[0]/64)
+    points = [[x_center,y_center],
+              [x_center-x_shift,y_center],
+              [x_center+x_shift,y_center],
+              [x_center,y_center-y_shift],
+              [x_center,y_center+y_shift]] 
+    
     l_values = []
     for p in points:
         x = p[0]-1
@@ -510,6 +565,8 @@ objp[:,:2] = np.mgrid[0:nx, 0:ny].T.reshape(-1,2)
 objpoints = [] # 3d points in real world space
 imgpoints = [] # 2d points in image plane.
 
+# The following is to find out the  camera matrix and distortion coefficients, and save them
+# or read back the saved
 if FLAGS.calibration_camera is True:
     if FLAGS.calibration_path is not "":
         cali_path = FLAGS.calibration_path + '/'
@@ -565,6 +622,8 @@ else:
     else:
         print("Sorry!, no camera calibration pickle...")
 
+# The following is to find out the perspective transformation matrix and save it
+# or to read back the saved matrix
 if FLAGS.perspective is True:
     if FLAGS.image_path is not "":
         if os.path.isfile(FLAGS.image_path) is True:
@@ -590,7 +649,7 @@ else:
     else:
         print("Sorry!, no perspective transormation pickle...")
 
-# The Pipeline
+# The pipeline to process each picture or frame
 def pipeline(image):    
     # Define conversions in x and y from pixels space to meters
     ym_per_pix = 30/720 # meters per pixel in y dimension
@@ -598,11 +657,16 @@ def pipeline(image):
     
     # Performs image distortion correction
     undist = cv2.undistort(image, mtx, dist, None, mtx)
+    
+    # Outputs the undistorted image if needed 
+    if FLAGS.debug is True:
+        filename = FLAGS.image_path.split('/')[-1].split('.')[0]
+        cv2.imwrite('./'+filename+'_undistorted.jpg', cv2.cvtColor(undist, cv2.COLOR_BGR2RGB))
 
     # Using HLS color space filter to find out yellow line and white line
     yellow_line_filter = hls_filter(undist, 90.0, 101.0, 0.0, 255.0, 50.0, 255.0)
     #white_line_filter = hls_filter(undist, 0.0, 180.0, 210.0, 255.0, 0.0, 255.0)
-    #Using average of l channel vaalue of road for 5 last iterations as threshold when dynamic filter flag is on
+    # Using average of l channel vaalue of road for 5 last iterations as threshold when dynamic filter flag is on
     if FLAGS.dynamic_filter is True:
         l_average_current = dynamic_parameters(image)
         l_average = dynamic_par.keep_and_average_l_ch(l_average_current)
@@ -614,29 +678,34 @@ def pipeline(image):
     # Using Sobel filter with R channel, to find out more white line edges
     r_ch_sobel_filter = sobel_filter(undist[:,:,0], 70.0, 255.0)
     
-    # Union all the filters
+    # Union of all the filters
     undist_filtered = np.zeros_like(undist)
     all_filter = yellow_line_filter | white_line_filter | r_ch_sobel_filter
     undist_filtered[all_filter] = undist[all_filter]
     
+    # Outputs the filtered image if needed 
     if FLAGS.debug is True:
         filename = FLAGS.image_path.split('/')[-1].split('.')[0]
         cv2.imwrite('./'+filename+'_filtered.jpg', cv2.cvtColor(undist_filtered, cv2.COLOR_BGR2RGB))
 
-    gray_filtered = cv2.cvtColor(undist_filtered, cv2.COLOR_BGR2GRAY)    
+    # Grayscale and binarize the filtered image
+    gray_filtered = grayscale(undist_filtered)    
     combined_binary = np.zeros_like(gray_filtered)
     combined_binary[gray_filtered>0] = 255
     
     # Performs perspective transforming               
     warped = cv2.warpPerspective(combined_binary, M, (combined_binary.shape[1], combined_binary.shape[0]), flags=cv2.INTER_LINEAR)
     
+    # Outputs the warped image if needed 
     if FLAGS.debug is True:
         warped_image = np.dstack((warped, warped, warped))
         filename = FLAGS.image_path.split('/')[-1].split('.')[0]
         cv2.imwrite('./'+filename+'_warped_filtered.jpg', cv2.cvtColor(warped_image, cv2.COLOR_BGR2RGB))
         
     y_eval = warped.shape[0] - 1
-                                
+    
+    # Depending on both the left and right lane line are detected,
+    # chooses different methods to find out the pixels for line-fitting                             
     if left_line.check_last_detected() == True and left_line.check_last_detected() == True:
         #left_fit = left_line.current_fit
         left_fit = left_line.best_fit
@@ -645,76 +714,99 @@ def pipeline(image):
         leftx, lefty, rightx, righty = known_fit_finding_lines(warped, left_fit, right_fit)
     else:
         leftx, lefty, rightx, righty = sliding_windows_finding_lines(warped)
-        
+    
+    # np.polyfit needs non-zero input vector
+    # it is needed to prevent the error when no pixels are found    
     if (len(leftx)>0) and (len(lefty)>0):
         left_fit = fit_pixles_polynomial(leftx, lefty, 1, 1)
-        left_fit_cr = fit_pixles_polynomial(leftx, lefty, xm_per_pix, ym_per_pix)
-        left_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, left_fit_cr)
+        #left_fit_cr = fit_pixles_polynomial(leftx, lefty, xm_per_pix, ym_per_pix)
+        #left_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, left_fit_cr)
+        left_line.allx = leftx
+        left_line.ally = lefty
     else:
         left_line.detected = False
         left_fit = left_line.best_fit
         
     if (len(rightx)>0) and (len(righty)>0):
         right_fit = fit_pixles_polynomial(rightx, righty, 1, 1)
-        right_fit_cr = fit_pixles_polynomial(rightx, righty, xm_per_pix, ym_per_pix)
-        right_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, right_fit_cr)
+        #right_fit_cr = fit_pixles_polynomial(rightx, righty, xm_per_pix, ym_per_pix)
+        #right_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, right_fit_cr)
+        right_line.allx = rightx
+        right_line.ally = righty
     else:
         right_line.detected = False
         right_fit = right_line.best_fit
     
+    # Only for debug
     if FLAGS.debug is True:
         leftx, lefty, rightx, righty = known_fit_finding_lines(warped, left_fit, right_fit)
     
+    # Calculate the base position of each fitting line 
     left_fit_x_pos = calculate_x_position(y_eval, left_fit)
     right_fit_x_pos = calculate_x_position(y_eval, right_fit)    
-        
-    left_line.current_fit = left_fit
-    right_line.current_fit = right_fit
     
+    # If the line base position is too left or too right, there might be problems
     if (left_fit_x_pos<=image.shape[1]/2) and (left_fit_x_pos>0):
         #left_line.detected = True
         left_line.keep_last_iterations(left_fit_x_pos, left_fit)
         left_line.average_last_iterations()
         left_line.line_base_pos = (image.shape[1]/2-left_fit_x_pos)*xm_per_pix
-        left_laneline_base_pos = "Left Line Position.:  {}".format(left_line.line_base_pos)+' m'
+        left_laneline_base_pos = "Left Line Position:  {}".format(round(left_line.line_base_pos, 3))+' m'
     else:
         left_line.detected = False
-        left_laneline_base_pos = "Left Line Position.: <<<<<"
+        left_laneline_base_pos = "Left Line Position: <<<<<"
         
     if (right_fit_x_pos<image.shape[1]) and (left_fit_x_pos>=left_fit_x_pos<image.shape[1]/2):
         #right_line.detected = True
         right_line.keep_last_iterations(right_fit_x_pos, right_fit)
         right_line.average_last_iterations()
         right_line.line_base_pos = (right_fit_x_pos-image.shape[1]/2)*xm_per_pix
-        right_laneline_base_pos = "Right Line Position.: {}".format(right_line.line_base_pos)+' m'
+        right_laneline_base_pos = "Right Line Position: {}".format(round(right_line.line_base_pos, 3))+' m'
     else:
         right_line.detected = False
-        right_laneline_base_pos = "Right Line Position.: >>>>>"
+        right_laneline_base_pos = "Right Line Position: >>>>>"
     
+    # If the moving average function is enabled, uses the averaged polynomial 
+    if FLAGS.moving_average is True:
+        left_fit = left_line.best_fit
+        right_fit = right_line.best_fit
+
+    left_line.current_fit = left_fit
+    right_line.current_fit = right_fit    
+        
     # Draws lane on the original image
     lane_drawing = draw_lane(image, left_fit, right_fit, rM)
     result = lane_drawing
+
+    left_fit_cr = fit_scaled_polynomial(image, left_fit, xm_per_pix, ym_per_pix)
+    left_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, left_fit_cr)
+    right_fit_cr = fit_scaled_polynomial(image, right_fit, xm_per_pix, ym_per_pix)
+    right_line.radius_of_curvature = calculate_curve_rad(y_eval*ym_per_pix, right_fit_cr)
+    vehicle_center = calculate_vehicle_position(image, left_line.bestx, right_line.bestx, xm_per_pix)
+    vehicle_center_info = "Center of Vehicle: {}".format(round(vehicle_center, 3))+' m'
+    
+    # Draws some data on the picture or frame
     font = cv2.FONT_HERSHEY_SIMPLEX
-    left_laneline = "Left Line Curve Rad.:  {}".format(left_line.radius_of_curvature)+' m'
-    right_laneline = "Right Line Curve Rad.: {}".format(right_line.radius_of_curvature)+' m'
+    left_laneline = "Left Line Curve Rad.:  {}".format(round(left_line.radius_of_curvature, 3))+' m'
+    right_laneline = "Right Line Curve Rad.: {}".format(round(right_line.radius_of_curvature, 3))+' m'
     cv2.putText(result,left_laneline,(10,100), font, 0.5,(255,255,255),1,cv2.LINE_AA)
     cv2.putText(result,right_laneline,(10,120), font, 0.5,(255,255,255),1,cv2.LINE_AA)
     cv2.putText(result,left_laneline_base_pos,(10,140), font, 0.5,(255,255,255),1,cv2.LINE_AA)
     cv2.putText(result,right_laneline_base_pos,(10,160), font, 0.5,(255,255,255),1,cv2.LINE_AA)    
+    cv2.putText(result,vehicle_center_info,(10,180), font, 0.5,(255,255,255),1,cv2.LINE_AA)    
     return result
 
-def main(__):    
+def main(__):
+    # Do the calibration and perspective transformation matrix finding first,
+    # then do the lane finding for one picture or video   
     if (FLAGS.calibration_camera == False) and (FLAGS.perspective == False):        
         if FLAGS.image is True:
             if FLAGS.image_path is not "":
                 if os.path.isfile(FLAGS.image_path) is True:
                     filename = FLAGS.image_path.split('/')[-1].split('.')[0]
-                    #img = cv2.imread(FLAGS.image_path)
                     img = mpimg.imread(FLAGS.image_path)
                     result = pipeline(img)
-                    #f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
-                    #ax2.imshow(result)
-                    
+                    # Output the result
                     cv2.imwrite('./'+filename+'_drawing_lane.jpg', cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
                 else:
                     print("There is no input image...")
