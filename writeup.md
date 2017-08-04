@@ -14,14 +14,14 @@ The goals / steps of this project are the following:
 
 [//]: # (Image References)
 
-[image1]: ./examples/undistorted.jpg "Undistorted"
-[image2]: ./examples/undistorted_test5.jpg "Road Transformed"
-[image3]: ./examples/test5_filtered.jpg "Filtered Image"
-[image4]: ./examples/dynamic_filter.jpg "Filtered Image"
-[image5]: ./examples/perspective_transformed.jpg "Warp Example"
-[image6]: ./examples/finding_pixels.jpg "Fit Visual"
-[image7]: ./examples/test5_drawing_lane "Output"
-[video1]: ./examples/project_video_drawing_lane_normal "Video"
+[image1]: ./output_images/undistorted.jpg "Undistorted"
+[image2]: ./output_images/undistorted_test5.jpg "Road Transformed"
+[image3]: ./output_images/test5_filtered.jpg "Filtered Image"
+[image4]: ./output_images/dynamic_filter.jpg "Filtered Image"
+[image5]: ./output_images/perspective_transformed.jpg "Warp Example"
+[image6]: ./output_images/finding_pixels.jpg "Fit Visual"
+[image7]: ./output_images/test5_drawing_lane "Output"
+[video1]: ./output_images/project_video_drawing_lane_normal "Video"
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
 
@@ -86,7 +86,9 @@ And after the pixels are found, `np.polyfit()`is called to get the second order 
 
 #### 5. Describe how (and identify where in your code) you calculated the radius of curvature of the lane and the position of the vehicle with respect to center.
 
-The functions are implemented in lines 482 through 503 in my code in `advancedFindingLane.py`, and are called in pipe line, lines 718 through 786 in my code in `advancedFindingLane.py`
+The calculation of left and right lane-line curvature is implemented in line 483 through 485 as `calculate_curve_rad()` function which uses the newly re-fitted polynomial that was calculated by function 'fit_scaled_polynomial()', in line 493 through 497, which re-fits the pixels that are generated from a known line-fitting and scaled in the x and y direction by different scalers repectively. These steps are in the pipeline, from line 781 through 784, namely, `left_fit_cr` and `right_fit_cr` which are new line-fitting for pixels in meter unit, and both the curve radius which are calcualted based on `left_fit_cr` and `right_fit_cr` and are in meter unit as well.
+
+The vehicl center is calculated in line 785, on which the function `calculate_vehicle_position()` is called. That function is implemented in line 499 through 503, and is only related to x position. Therefore the calculation is based on the x-coordinates of pixels and scaled in the x direction.
 
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
@@ -100,7 +102,8 @@ I implemented this step in lines 505 through 530 in my code in `advancedFindingL
 
 #### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
 
-Here's a [video1](./examples/project_video_drawing_lane_normal.mp4)
+Here's a [video1](./project_video_drawing_lane_normal.mp4)
+(The video path is `./project_video_drawing_lane_normal.mp4`)
 
 ---
 
@@ -117,18 +120,27 @@ Here's a [video1](./examples/project_video_drawing_lane_normal.mp4)
 4. The dynamic filter concept is designed in. The implementation is for the white-line filter, for the reason that the lower threshold of L channel is sensible to the environments. The setting for project video is not suitable for challenge video. Even on the same video, there might be different environments, such as beneath a bridge. But the method has to run with a good algorithm for how to modify the parameters. Currently I just added 30 to the measured L ch. value of road surface for the lower threshold. That's simple but creates limited improvements. I would develop more advanced algorithm for more other filters to gain more robustness.
 The following is a demo with or without dynamic filter function enabled, and you can see the improvements.
 
-    Without dynamic filter [video2](./examples/challenge_video_drawing_lane_normal.mp4)
+    Without dynamic filter [video2](./challenge_video_drawing_lane_normal.mp4)
+    (The video path is `./challenge_video_drawing_lane_normal.mp4`)
 
     With dynamic filter [video3](./examples/challenge_video_drawing_lane_dy.mp4)
+    (The video path is `./challenge_video_drawing_lane_normal_dy.mp4`)
 
 5. The moving average is used on the line-fitting polynomials' coefficients for last several iterations. On each frame the program records the averaged polynomial on which the searching for line pixels is based. The averaged polynomial is also used for the lane drawing and calculation of vehicle center. It works like a low pass filter and prevents jitters.
 The following is the same video as above but with the moving average function enabled.
 
     With moving average function [video4](./examples/challenge_video_drawing_lane_ma.mp4)
+    (The video path is `./challenge_video_drawing_lane_normal_ma.mp4`)
 
 6. If both dynamic filter and moving average methods are used, the performance would be more stable, like the following demo.
     
     [video5](./examples/challenge_video_drawing_lane_ma_dy.mp4)
+    (The video path is `./challenge_video_drawing_lane_normal_ma_dy.mp4`)
+
+
+7. However, my pipeline with dynamic filter enabled will sometimes let the fitting lines wobble. The possible reason is that currently I just added 30 to the measured L ch. value of road surface as the lower threshold of L ch. for white-line filter, and the added value is not enough for some kind of road surface. The solution might be the development of an advanced algorithm for the tuning of thresholds values, or with a look-up-table.
+
+8. Tested with the harder challenge video, my pipeline would still fail when glare or reflection appeared on the image. The solution would be that a more robust combination of filters should be designed, and it would be used when the glare and reflection situation is detected by the method of dynamic filter turned on.
 
 
 
