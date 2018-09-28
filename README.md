@@ -1,7 +1,7 @@
 
 ## Advanced Lane Finding Project
 
-The goals / steps of this project are the following:
+This project is the fouth project of Udacity Self-driving Car Nanodegree Term1. The goals / steps of this project are the following:
 
 * Compute the camera calibration matrix and distortion coefficients given a set of chessboard images.
 * Apply a distortion correction to raw images.
@@ -20,24 +20,17 @@ The goals / steps of this project are the following:
 [image4]: ./output_images/dynamic_filter.jpg "Filtered Image"
 [image5]: ./output_images/perspective_transformed.jpg "Warp Example"
 [image6]: ./output_images/finding_pixels.jpg "Fit Visual"
-[image7]: ./output_images/test5_drawing_lane "Output"
-[video1]: ./output_images/project_video_drawing_lane_normal "Video"
-
-## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
-
-### Here I will consider the rubric points individually and describe how I addressed each point in my implementation.  
+[image7]: ./output_images/test5_drawing_lane.jpg "Output"
+[video1]: ./output_images/project_video_drawing_lane_normal.mp4 "Video"
 
 ---
 
-### Writeup / README
+### The pre-processing
 
-#### 1. Provide a Writeup / README that includes all the rubric points and how I addressed each one.  
 
-You're reading it!
+#### Camera Calibration
 
-### Camera Calibration
-
-#### 1. Briefly state how I computed the camera matrix and distortion coefficients.
+##### 1. Computing the camera matrix and distortion coefficients.
 
 The code for this step is contained in the in lines 555 through 623 of the file called `advancedFindingLane.py`.  
 
@@ -49,12 +42,12 @@ I then used the output `objpoints` and `imgpoints` to compute the camera calibra
 
 ### Pipeline (single images)
 
-#### 1. Provide an example of a distortion-corrected image.
+#### 1. An example of a distortion-corrected image
 
 To demonstrate this step, I will describe how I apply the distortion correction to one of the test images like this one:
 ![alt text][image2]
 
-#### 2. Describe how (and identify where in your code) you used color transforms, gradients or other methods to create a thresholded binary image.  Provide an example of a binary image result.
+#### 2. Methods to create a thresholded binary image
 
 I used a union of two HLS color space filters and one R channel gradient filter to generate a binary image (thresholding steps at lines 666 through 684 in `advancedFindingLane.py`). One HLS filter is to find out the pixels which represents the yellow lines, and the other one is for white lines. The R channel gradient filter is to find out more white lines' edges.
 
@@ -68,7 +61,7 @@ In addition, a dynamic filter concept was also designed in. When the funtion is 
 
 ![alt text][image4]
 
-#### 3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
+#### 3. Perspective transforming
 
 The code for my perspective transform includes the functions from Project 1, which appears in lines 119 through 291 in the file `advancedFindingLane.py`. The `gen_perspective_trans_matrix()` function takes as inputs an image (`img`) and automatically generates source (`src`) and destination (`dst`) points.  The method is from Project 1 implementation, which finds out two straight lines which represent the left and right edge of the lane respectively. The start and end points of both lines form the four corners of a trapezoid which should become rectangular after perspective transformation.
 
@@ -76,7 +69,7 @@ I verified that my perspective transform was working as expected by apply the `g
 
 ![alt text][image5]
 
-#### 4. Describe how (and identify where in your code) you identified lane-line pixels and fit their positions with a polynomial?
+#### 4. Identifying lane-line pixels and fitting their positions with a polynomial
 
 Then there are two methods implemented to find out lane-line pixels and fit the lane lines with a 2nd order polynomial. The first one is sliding window method, which needs more calculation power. But if both the left and right line-fitting are known, the second method would be used, which is more efficient.
 
@@ -84,13 +77,13 @@ And after the pixels are found, `np.polyfit()`is called to get the second order 
 
 ![alt text][image6]
 
-#### 5. Describe how (and identify where in your code) you calculated the radius of curvature of the lane and the position of the vehicle with respect to center.
+#### 5. Calculating the radius of curvature of the lane and the position of the vehicle with respect to center
 
 The calculation of left and right lane-line curvature is implemented in line 483 through 485 as `calculate_curve_rad()` function which uses the newly re-fitted polynomial that was calculated by function 'fit_scaled_polynomial()', in line 493 through 497, which re-fits the pixels that are generated from a known line-fitting and scaled in the x and y direction by different scalers repectively. These steps are in the pipeline, from line 781 through 784, namely, `left_fit_cr` and `right_fit_cr` which are new line-fitting for pixels in meter unit, and both the curve radius which are calcualted based on `left_fit_cr` and `right_fit_cr` and are in meter unit as well.
 
 The vehicl center is calculated in line 785, on which the function `calculate_vehicle_position()` is called. That function is implemented in line 499 through 503, and is only related to x position. Therefore the calculation is based on the x-coordinates of pixels and scaled in the x direction.
 
-#### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
+#### 6. Plotting back down onto the road such that the lane area is identified clearly
 
 I implemented this step in lines 505 through 530 in my code in `advancedFindingLane.py` in the function `draw_lane()`.  Here is an example of my result on a test image:
 
@@ -100,7 +93,7 @@ I implemented this step in lines 505 through 530 in my code in `advancedFindingL
 
 ### Pipeline (video)
 
-#### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
+#### 1. Link to the final video output.
 
 Here's a [video1](./project_video_drawing_lane_normal.mp4)
 (The video path is `./project_video_drawing_lane_normal.mp4`)
@@ -109,7 +102,7 @@ Here's a [video1](./project_video_drawing_lane_normal.mp4)
 
 ### Discussion
 
-#### 1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
+#### 1. Brief discussion of problems / issues faced in the implementation of this project.
 
 1. The automatic generation of perspective transformation matrix is implemented. Without hard code I used the hough line methods to find out the four corners for before and after the perspective transformation. It's pretty convenient, but of course, you have to make sure that the picture you used must have a straight lane in front of you.
 
